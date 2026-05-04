@@ -7,11 +7,11 @@ import axios from "axios";
 // =====================
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
-
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_OWNER = process.env.GITHUB_OWNER;
 const GITHUB_REPO = process.env.GITHUB_REPO;
 const PROJECT_ID = process.env.PROJECT_ID;
+const ALLOWED_CHANNEL_ID = process.env.ALLOWED_CHANNEL_ID; // Add this in Render
 
 // =====================
 // SYSTEM PROMPTS
@@ -47,6 +47,12 @@ const CHAT_SYSTEM_PROMPT = `You are a helpful Discord assistant. Answer question
 // =====================
 console.log("🚀 Bot starting...");
 
+if (ALLOWED_CHANNEL_ID) {
+  console.log(`🔒 Bot will ONLY respond in channel ID: ${ALLOWED_CHANNEL_ID}`);
+} else {
+  console.log("⚠️ No channel restriction set. Bot will respond in all channels.");
+}
+
 // =====================
 // DISCORD CLIENT
 // =====================
@@ -67,7 +73,8 @@ app.get("/", (req, res) => {
   res.json({
     status: "ok",
     bot: client?.readyAt ? true : false,
-    time: new Date().toISOString()
+    time: new Date().toISOString(),
+    restrictedChannel: ALLOWED_CHANNEL_ID || "none"
   });
 });
 
@@ -80,6 +87,10 @@ app.listen(PORT, () => console.log(`🌐 Server running on ${PORT}`));
 client.once("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   console.log("✅ Bot is ready");
+  
+  if (ALLOWED_CHANNEL_ID) {
+    console.log(`🔒 Listening only in channel ID: ${ALLOWED_CHANNEL_ID}`);
+  }
 });
 
 // =====================
@@ -128,9 +139,20 @@ async function addToProject(issueNodeId) {
 // MESSAGE HANDLER
 // =====================
 client.on("messageCreate", async (message) => {
+  // Ignore bot's own messages
   if (message.author.bot) return;
 
+  // =====================
+  // CHANNEL RESTRICTION
+  // =====================
+  // Only respond in the allowed channel (if specified)
+  if (ALLOWED_CHANNEL_ID && message.channel.id !== ALLOWED_CHANNEL_ID) {
+    console.log(`⏭️ Ignoring message in ${message.channel.name || message.channel.id} - not allowed channel`);
+    return; // Exit without responding
+  }
+
   const text = message.content;
+  console.log(`📩 [${message.author.tag}] in #${message.channel.name}: ${text.substring(0, 50)}${text.length > 50 ? "..." : ""}`);
 
   try {
     // =====================
@@ -161,7 +183,6 @@ client.on("messageCreate", async (message) => {
       }
 
       try {
-        // Send typing indicator
         await message.channel.sendTyping();
 
         // Call Groq to format the ticket using the triage prompt
@@ -197,11 +218,9 @@ client.on("messageCreate", async (message) => {
         // Parse JSON response
         let ticketData;
         try {
-          // Clean markdown if present
           let cleanResponse = groqResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '');
           ticketData = JSON.parse(cleanResponse);
         } catch (e) {
-          // Fallback if JSON parsing fails
           ticketData = {
             title: issueText.slice(0, 50),
             description: issueText,
@@ -297,7 +316,6 @@ client.on("messageCreate", async (message) => {
 
         const reply = aiRes.data?.choices?.[0]?.message?.content || "No response";
         
-        // Split long messages if needed
         if (reply.length > 1900) {
           const chunks = reply.match(/.{1,1900}/g);
           await message.reply(chunks[0]);
