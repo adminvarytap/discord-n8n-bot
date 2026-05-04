@@ -11,7 +11,13 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_OWNER = process.env.GITHUB_OWNER;
 const GITHUB_REPO = process.env.GITHUB_REPO;
 const PROJECT_ID = process.env.PROJECT_ID;
-const ALLOWED_CHANNEL_ID = process.env.ALLOWED_CHANNEL_ID; // Add this in Render
+
+// =====================
+// CHANNEL RESTRICTION
+// =====================
+// Bot will ONLY respond in this channel
+const ALLOWED_CHANNEL_ID = "1500037428621086751"; // varytap-assistant channel
+const ALLOWED_CHANNEL_NAME = "varytap-assistant";
 
 // =====================
 // SYSTEM PROMPTS
@@ -46,12 +52,7 @@ const CHAT_SYSTEM_PROMPT = `You are a helpful Discord assistant. Answer question
 // STARTUP LOGS
 // =====================
 console.log("🚀 Bot starting...");
-
-if (ALLOWED_CHANNEL_ID) {
-  console.log(`🔒 Bot will ONLY respond in channel ID: ${ALLOWED_CHANNEL_ID}`);
-} else {
-  console.log("⚠️ No channel restriction set. Bot will respond in all channels.");
-}
+console.log(`🔒 Bot will ONLY respond in #${ALLOWED_CHANNEL_NAME} (${ALLOWED_CHANNEL_ID})`);
 
 // =====================
 // DISCORD CLIENT
@@ -74,7 +75,7 @@ app.get("/", (req, res) => {
     status: "ok",
     bot: client?.readyAt ? true : false,
     time: new Date().toISOString(),
-    restrictedChannel: ALLOWED_CHANNEL_ID || "none"
+    restrictedChannel: ALLOWED_CHANNEL_NAME
   });
 });
 
@@ -86,11 +87,8 @@ app.listen(PORT, () => console.log(`🌐 Server running on ${PORT}`));
 // =====================
 client.once("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-  console.log("✅ Bot is ready");
-  
-  if (ALLOWED_CHANNEL_ID) {
-    console.log(`🔒 Listening only in channel ID: ${ALLOWED_CHANNEL_ID}`);
-  }
+  console.log(`✅ Bot is ready`);
+  console.log(`🔒 Listening only in #${ALLOWED_CHANNEL_NAME} (${ALLOWED_CHANNEL_ID})`);
 });
 
 // =====================
@@ -145,10 +143,10 @@ client.on("messageCreate", async (message) => {
   // =====================
   // CHANNEL RESTRICTION
   // =====================
-  // Only respond in the allowed channel (if specified)
-  if (ALLOWED_CHANNEL_ID && message.channel.id !== ALLOWED_CHANNEL_ID) {
-    console.log(`⏭️ Ignoring message in ${message.channel.name || message.channel.id} - not allowed channel`);
-    return; // Exit without responding
+  // Only respond in the allowed channel (#varytap-assistant)
+  if (message.channel.id !== ALLOWED_CHANNEL_ID) {
+    // Silently ignore messages from other channels
+    return;
   }
 
   const text = message.content;
