@@ -3,23 +3,30 @@ import { Client, GatewayIntentBits } from "discord.js";
 import axios from "axios";
 
 // =====================
-// EXPRESS (Render requirement)
-// =====================
-const app = express();
-app.get("/", (req, res) => res.send("Bot is running"));
-app.listen(process.env.PORT || 3000);
-
-// =====================
-// CONFIG
+// ENV VARIABLES
 // =====================
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
+
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_OWNER = process.env.GITHUB_OWNER;
 const GITHUB_REPO = process.env.GITHUB_REPO;
+const PROJECT_ID = process.env.PROJECT_ID;
 
 // =====================
-// DISCORD BOT
+// EXPRESS (Render health check)
+// =====================
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("🤖 Discord Bot is running");
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+
+// =====================
+// DISCORD CLIENT
 // =====================
 const client = new Client({
   intents: [
@@ -29,12 +36,12 @@ const client = new Client({
   ]
 });
 
-client.once("ready", () => {
+client.once("clientReady", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
 // =====================
-// HANDLE MESSAGE
+// MAIN MESSAGE HANDLER
 // =====================
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
@@ -42,25 +49,23 @@ client.on("messageCreate", async (message) => {
   const text = message.content;
 
   try {
-    // =====================
-    // TICKET FLOW
-    // =====================
-    if (text.startsWith("!ticket ")) {
-      const issue = text.replace("!ticket ", "");
+    // =========================
+    // 1. TICKET FLOW
+    // =========================
+    if (text.startsWith("!ticket")) {
+      const issueText = text.replace("!ticket", "").trim();
 
-      // Create GitHub issue
-      await axios.post(
+      if (!issueText) {
+        await message.reply("⚠️ Please describe the issue.");
+        return;
+      }
+
+      // 1. Create GitHub Issue
+      const issueRes = await axios.post(
         `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`,
         {
-          title: `[BUG] ${issue}`,
-          body: `
-User: ${message.author.username}
-
-Issue:
-${issue}
-
-Source: Discord bot
-          `
+          title: `[TICKET] ${issueText.slice(0, 60)}`,
+          body: issueText
         },
         {
           headers: {
@@ -70,13 +75,40 @@ Source: Discord bot
         }
       );
 
-      await message.reply("📝 Ticket created in GitHub!");
+      const issueNodeId = issueRes.data.node_id;
+
+      // 2. Add Issue to GitHub Project (V2)
+      await axios.post(
+        "https://api.github.com/graphql",
+        {
+          query: `
+            mutation {
+              addProjectV2ItemById(input: {
+                projectId: "${PROJECT_ID}",
+                contentId: "${issueNodeId}"
+              }) {
+                item {
+                  id
+                }
+              }
+            }
+          `
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${GITHUB_TOKEN}`,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+
+      await message.reply("📝 Ticket created and added to project board!");
       return;
     }
 
-    // =====================
-    // AI RESPONSE (Groq)
-    // =====================
+    // =========================
+    // 2. AI CHAT (GROQ)
+    // =========================
     const aiRes = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
@@ -84,8 +116,7 @@ Source: Discord bot
         messages: [
           {
             role: "system",
-            content:
-              "You are a helpful assistant. Answer clearly and concisely."
+            content: "You are a helpful assistant for a SaaS support system."
           },
           {
             role: "user",
@@ -107,7 +138,7 @@ Source: Discord bot
     await message.reply(reply);
 
   } catch (err) {
-    console.error(err.response?.data || err.message);
+    console.error("❌ Error:", err.response?.data || err.message);
     await message.reply("⚠️ Error processing request");
   }
 });
