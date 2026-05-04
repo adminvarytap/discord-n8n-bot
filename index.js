@@ -151,9 +151,45 @@ client.on("messageCreate", async (message) => {
         `**Commands:**\n` +
         `• \`!ping\` - Check if bot is alive\n` +
         `• \`!config\` - Show this config\n` +
+        `• \`!groq\` - Test Groq API\n` +
+        `• \`!github\` - Test GitHub connection\n` +
         `• \`!ticket [message]\` - Create GitHub issue\n` +
         `• Any question - AI will answer`
       );
+      return;
+    }
+
+    // Test Groq API directly
+    if (text === "!groq") {
+      if (!GROQ_API_KEY) {
+        await message.reply("❌ Groq API key not configured.");
+        return;
+      }
+      
+      await message.channel.sendTyping();
+      
+      try {
+        const test = await axios({
+          method: "POST",
+          url: "https://api.groq.com/openai/v1/chat/completions",
+          headers: {
+            "Authorization": `Bearer ${GROQ_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          data: {
+            model: "mixtral-8x7b-32768",
+            messages: [{ role: "user", content: "Reply with: Groq API is working!" }],
+            max_tokens: 50
+          },
+          timeout: 10000
+        });
+        
+        const result = test.data?.choices?.[0]?.message?.content;
+        await message.reply(`✅ **Groq Test Passed!**\n\n${result}`);
+      } catch (error) {
+        console.error("Groq Test Error:", error.response?.data || error.message);
+        await message.reply(`❌ **Groq Test Failed**\n\nError: ${error.response?.data?.error?.message || error.message}`);
+      }
       return;
     }
 
@@ -281,72 +317,87 @@ client.on("messageCreate", async (message) => {
     // =====================
     // AI CHAT FLOW (GROQ)
     // =====================
-    console.log("🤖 Routing to Groq AI...");
-    
-    if (!GROQ_API_KEY) {
-      await message.reply("💡 AI chat is not configured yet. Contact server admin.");
-      return;
-    }
-
-    try {
-      // Send typing indicator
-      await message.channel.sendTyping();
+    // Only respond to messages that don't start with !commands
+    if (!text.startsWith("!")) {
+      console.log("🤖 AI Chat requested");
       
-      const aiRes = await axios.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        {
-          model: "llama3-8b-8192",
-          messages: [
-            {
-              role: "system",
-              content: "You are a helpful Discord assistant. Answer questions concisely and warmly. Keep responses under 500 characters."
-            },
-            {
-              role: "user",
-              content: text
-            }
-          ],
-          max_tokens: 500,
-          temperature: 0.7
-        },
-        {
+      if (!GROQ_API_KEY) {
+        await message.reply("💡 AI is not configured yet. Contact server admin.");
+        return;
+      }
+
+      try {
+        await message.channel.sendTyping();
+        
+        console.log("📡 Calling Groq API...");
+        
+        const aiRes = await axios({
+          method: "POST",
+          url: "https://api.groq.com/openai/v1/chat/completions",
           headers: {
-            Authorization: `Bearer ${GROQ_API_KEY}`,
+            "Authorization": `Bearer ${GROQ_API_KEY}`,
             "Content-Type": "application/json"
           },
-          timeout: 15000
-        }
-      );
+          data: {
+            model: "mixtral-8x7b-32768",
+            messages: [
+              {
+                role: "system",
+                content: "You are a helpful Discord assistant. Answer concisely and warmly. Keep responses under 400 characters."
+              },
+              {
+                role: "user",
+                content: text
+              }
+            ],
+            max_tokens: 400,
+            temperature: 0.7
+          },
+          timeout: 20000
+        });
 
-      const reply = aiRes.data?.choices?.[0]?.message?.content || "No response from AI";
-      console.log(`✅ AI response sent (${reply.length} chars)`);
-      
-      // Split long messages (Discord limit is 2000 characters)
-      if (reply.length > 1900) {
-        const chunks = reply.match(/.{1,1900}/g);
-        await message.reply(chunks[0]);
-        for (let i = 1; i < chunks.length; i++) {
-          await message.channel.send(chunks[i]);
+        const reply = aiRes.data?.choices?.[0]?.message?.content;
+        
+        if (!reply) {
+          throw new Error("No response from Groq");
         }
-      } else {
-        await message.reply(reply);
-      }
-      
-    } catch (groqError) {
-      console.error("❌ Groq Error:", {
-        status: groqError.response?.status,
-        data: groqError.response?.data,
-        message: groqError.message
-      });
-      
-      if (groqError.response?.status === 401) {
-        await message.reply("🔑 Groq API key is invalid. Please check your GROQ_API_KEY environment variable.");
-      } else if (groqError.response?.status === 429) {
-        await message.reply("⏰ Groq rate limit exceeded. Please wait a moment and try again.");
-      } else if (groqError.code === 'ECONNABORTED') {
-        await message.reply("⏱️ AI service timeout. Please try again.");
-      } else {
-        await message.reply("⚠️ AI service error. Please try again later.");
+        
+        console.log(`✅ AI replied: ${reply.substring(0, 100)}...`);
+        
+        // Split long messages (Discord limit is 2000 characters)
+        if (reply.length > 1900) {
+          const chunks = reply.match(/.{1,1900}/g);
+          await message.reply(chunks[0]);
+          for (let i = 1; i < chunks.length; i++) {
+            await message.channel.send(chunks[i]);
+          }
+        } else {
+          await message.reply(reply);
+        }
+        
+      } catch (error) {
+        console.error("Groq Error Details:", {
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          data: error.response?.data,
+          message: error.message
+        });
+        
+        let errorMsg = "⚠️ AI service error. ";
+        
+        if (error.response?.status === 401) {
+          errorMsg = "🔑 Groq API key is invalid. Please regenerate it at console.groq.com";
+        } else if (error.response?.status === 429) {
+          errorMsg = "⏰ Too many requests. Please try again in a few seconds.";
+        } else if (error.response?.status === 404) {
+          errorMsg = "❌ Model not found. Please contact admin.";
+        } else if (error.code === 'ECONNABORTED') {
+          errorMsg = "⏱️ Request timeout. Please try again.";
+        } else if (error.response?.data?.error?.message) {
+          errorMsg = `⚠️ ${error.response.data.error.message}`;
+        }
+        
+        await message.reply(errorMsg);
       }
     }
 
