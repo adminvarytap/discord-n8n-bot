@@ -3,7 +3,7 @@ import { Client, GatewayIntentBits } from "discord.js";
 import axios from "axios";
 
 // =====================
-// ENVIRONMENT VALIDATION
+// ENVIRONMENT VARIABLES
 // =====================
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -12,19 +12,28 @@ const GITHUB_OWNER = process.env.GITHUB_OWNER;
 const GITHUB_REPO = process.env.GITHUB_REPO;
 const PROJECT_ID = process.env.PROJECT_ID;
 
-// Validate required variables
-if (!DISCORD_TOKEN) {
-  console.error("❌ DISCORD_TOKEN is required");
-  process.exit(1);
+// =====================
+// STARTUP VALIDATION
+// =====================
+console.log("🚀 Starting Discord Bot...");
+console.log("═".repeat(50));
+
+const missingVars = [];
+if (!DISCORD_TOKEN) missingVars.push("DISCORD_TOKEN");
+if (!GROQ_API_KEY) missingVars.push("GROQ_API_KEY (AI disabled)");
+if (!GITHUB_TOKEN) missingVars.push("GITHUB_TOKEN (GitHub disabled)");
+if (!GITHUB_OWNER) missingVars.push("GITHUB_OWNER");
+if (!GITHUB_REPO) missingVars.push("GITHUB_REPO");
+
+if (missingVars.length > 0) {
+  console.log("⚠️ Missing environment variables:");
+  missingVars.forEach(v => console.log(`   - ${v}`));
 }
 
-console.log("✅ Environment loaded:", {
-  discord: !!DISCORD_TOKEN,
-  groq: !!GROQ_API_KEY,
-  github: !!GITHUB_TOKEN,
-  project: !!PROJECT_ID,
-  repo: `${GITHUB_OWNER}/${GITHUB_REPO}`
-});
+console.log(`📁 GitHub Repo: ${GITHUB_OWNER && GITHUB_REPO ? `${GITHUB_OWNER}/${GITHUB_REPO}` : "Not configured"}`);
+console.log(`🤖 Groq AI: ${GROQ_API_KEY ? "✅ Enabled" : "❌ Disabled"}`);
+console.log(`📋 GitHub Project: ${PROJECT_ID ? "✅ Configured" : "❌ Not configured"}`);
+console.log("═".repeat(50));
 
 // =====================
 // EXPRESS SERVER (for Render health checks)
@@ -35,7 +44,9 @@ app.get("/", (req, res) => {
   res.json({ 
     status: "ok", 
     bot: client?.isReady?.() || false,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    github: `${GITHUB_OWNER}/${GITHUB_REPO}`,
+    ai: !!GROQ_API_KEY
   });
 });
 
@@ -60,10 +71,11 @@ const client = new Client({
   ]
 });
 
-// ✅ FIXED: 'ready' not 'clientReady'
 client.once("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   console.log(`📡 Bot is in ${client.guilds.cache.size} servers`);
+  console.log("═".repeat(50));
+  console.log("✅ Bot is ready and listening for messages!");
 });
 
 // =====================
@@ -76,7 +88,7 @@ async function addIssueToProject(issueNodeId) {
   }
 
   try {
-    const response = await axios.post(
+    await axios.post(
       "https://api.github.com/graphql",
       {
         query: `
@@ -103,7 +115,6 @@ async function addIssueToProject(issueNodeId) {
         }
       }
     );
-    
     console.log("✅ Issue added to project board");
     return true;
   } catch (error) {
@@ -120,13 +131,67 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const text = message.content;
-  console.log(`📩 ${message.author.tag}: ${text.substring(0, 50)}`);
+  console.log(`📩 [${message.author.tag}]: ${text.substring(0, 50)}${text.length > 50 ? "..." : ""}`);
 
   try {
+    // =====================
+    // TEST COMMANDS
+    // =====================
+    if (text === "!ping") {
+      await message.reply(`🏓 Pong! Bot is alive (Latency: ${Date.now() - message.createdTimestamp}ms)`);
+      return;
+    }
+
+    if (text === "!config") {
+      await message.reply(
+        `📋 **Bot Configuration**\n\n` +
+        `**GitHub:** ${GITHUB_TOKEN ? "✅" : "❌"} ${GITHUB_OWNER}/${GITHUB_REPO}\n` +
+        `**Groq AI:** ${GROQ_API_KEY ? "✅" : "❌"}\n` +
+        `**Project Board:** ${PROJECT_ID ? "✅" : "❌"}\n\n` +
+        `**Commands:**\n` +
+        `• \`!ping\` - Check if bot is alive\n` +
+        `• \`!config\` - Show this config\n` +
+        `• \`!ticket [message]\` - Create GitHub issue\n` +
+        `• Any question - AI will answer`
+      );
+      return;
+    }
+
+    if (text === "!github") {
+      if (!GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
+        await message.reply("❌ GitHub not configured. Missing variables.");
+        return;
+      }
+      
+      try {
+        const test = await axios.get(
+          `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}`,
+          { headers: { Authorization: `Bearer ${GITHUB_TOKEN}` } }
+        );
+        
+        await message.reply(
+          `✅ **GitHub Connected!**\n\n` +
+          `**Repository:** ${test.data.full_name}\n` +
+          `**Visibility:** ${test.data.visibility}\n` +
+          `**Issues:** ${test.data.has_issues ? "✅ Enabled" : "❌ Disabled"}\n` +
+          `**URL:** ${test.data.html_url}`
+        );
+      } catch (error) {
+        await message.reply(
+          `❌ **GitHub Error**\n\n` +
+          `**Status:** ${error.response?.status}\n` +
+          `**Message:** ${error.response?.data?.message || error.message}`
+        );
+      }
+      return;
+    }
+
     // =====================
     // TICKET FLOW (!ticket)
     // =====================
     if (text.startsWith("!ticket")) {
+      console.log("🎫 Ticket flow triggered");
+      
       const issueText = text.replace("!ticket", "").trim();
 
       if (!issueText) {
@@ -137,60 +202,77 @@ client.on("messageCreate", async (message) => {
         return;
       }
 
-      console.log("🎫 Creating ticket:", issueText);
+      console.log(`📝 Ticket description: ${issueText.substring(0, 100)}`);
 
       // Check GitHub credentials
       if (!GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
-        await message.reply("❌ GitHub not configured. Please contact server admin.");
+        const missing = [];
+        if (!GITHUB_TOKEN) missing.push("GITHUB_TOKEN");
+        if (!GITHUB_OWNER) missing.push("GITHUB_OWNER");
+        if (!GITHUB_REPO) missing.push("GITHUB_REPO");
+        
+        await message.reply(`❌ GitHub not configured. Missing: ${missing.join(", ")}`);
         return;
       }
 
       try {
-        // Step 1: Create GitHub Issue
+        // Send typing indicator
+        await message.channel.sendTyping();
+        
+        console.log(`📁 Creating issue in: ${GITHUB_OWNER}/${GITHUB_REPO}`);
+        
         const issueRes = await axios.post(
           `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`,
           {
             title: `[Discord] ${issueText.slice(0, 60)}`,
-            body: `**Reported by:** ${message.author.tag} (${message.author.id})\n\n**Issue:**\n${issueText}`,
+            body: `**Reported by:** ${message.author.tag} (${message.author.id})\n\n**Issue:**\n${issueText}\n\n---\n*Created via Discord Bot*`,
             labels: ["from-discord", "auto-generated"]
           },
           {
             headers: {
               Authorization: `Bearer ${GITHUB_TOKEN}`,
               Accept: "application/vnd.github.v3+json"
-            }
+            },
+            timeout: 10000
           }
         );
 
         const issueUrl = issueRes.data.html_url;
-        const issueNodeId = issueRes.data.node_id;
         const issueNumber = issueRes.data.number;
+        const issueNodeId = issueRes.data.node_id;
 
         console.log(`✅ Issue #${issueNumber} created: ${issueUrl}`);
 
-        // Step 2: Add to Project Board (if Project ID provided)
+        // Add to project board if configured
         let projectAdded = false;
         if (PROJECT_ID) {
           projectAdded = await addIssueToProject(issueNodeId);
         }
 
-        // Step 3: Send confirmation to Discord
         const projectMessage = projectAdded ? "\n✅ Added to project board" : "";
+        
         await message.reply(
           `✅ **GitHub Ticket Created!**\n\n` +
+          `**Repository:** ${GITHUB_OWNER}/${GITHUB_REPO}\n` +
           `**Issue:** #${issueNumber}\n` +
           `**URL:** ${issueUrl}${projectMessage}`
         );
         
       } catch (githubError) {
-        console.error("❌ GitHub Error:", githubError.response?.data || githubError.message);
+        console.error("❌ GitHub Error:", {
+          status: githubError.response?.status,
+          data: githubError.response?.data,
+          message: githubError.message
+        });
         
-        if (githubError.response?.status === 401) {
-          await message.reply("❌ GitHub authentication failed. Please check GITHUB_TOKEN.");
-        } else if (githubError.response?.status === 404) {
-          await message.reply("❌ Repository not found. Check GITHUB_OWNER and GITHUB_REPO.");
+        if (githubError.response?.status === 404) {
+          await message.reply(`❌ Repository not found: ${GITHUB_OWNER}/${GITHUB_REPO}\n\nPlease check the repository name and your access permissions.`);
+        } else if (githubError.response?.status === 401) {
+          await message.reply("❌ GitHub token is invalid or expired. Please regenerate it in GitHub Settings → Developer settings → Personal access tokens.");
+        } else if (githubError.response?.status === 403) {
+          await message.reply("❌ GitHub token doesn't have permission to write to this repository. Make sure 'repo' scope is enabled.");
         } else {
-          await message.reply("❌ Failed to create GitHub ticket. Please try again later.");
+          await message.reply(`❌ GitHub error: ${githubError.response?.data?.message || githubError.message}`);
         }
       }
       return;
@@ -199,57 +281,78 @@ client.on("messageCreate", async (message) => {
     // =====================
     // AI CHAT FLOW (GROQ)
     // =====================
+    console.log("🤖 Routing to Groq AI...");
+    
     if (!GROQ_API_KEY) {
       await message.reply("💡 AI chat is not configured yet. Contact server admin.");
       return;
     }
 
-    console.log("🤖 Asking Groq AI...");
-    
-    const aiRes = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: "llama3-8b-8192",
-        messages: [
-          {
-            role: "system",
-            content: "You are a helpful Discord assistant. Answer questions concisely and warmly. Keep responses under 500 characters."
+    try {
+      // Send typing indicator
+      await message.channel.sendTyping();
+      
+      const aiRes = await axios.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          model: "llama3-8b-8192",
+          messages: [
+            {
+              role: "system",
+              content: "You are a helpful Discord assistant. Answer questions concisely and warmly. Keep responses under 500 characters."
+            },
+            {
+              role: "user",
+              content: text
+            }
+          ],
+          max_tokens: 500,
+          temperature: 0.7
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${GROQ_API_KEY}`,
+            "Content-Type": "application/json"
           },
-          {
-            role: "user",
-            content: text
-          }
-        ],
-        max_tokens: 500,
-        temperature: 0.7
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json"
+          timeout: 15000
         }
-      }
-    );
+      );
 
-    const reply = aiRes.data?.choices?.[0]?.message?.content || "No response from AI";
-    await message.reply(reply);
-    console.log(`✅ Replied to ${message.author.tag}`);
+      const reply = aiRes.data?.choices?.[0]?.message?.content || "No response from AI";
+      console.log(`✅ AI response sent (${reply.length} chars)`);
+      
+      // Split long messages (Discord limit is 2000 characters)
+      if (reply.length > 1900) {
+        const chunks = reply.match(/.{1,1900}/g);
+        await message.reply(chunks[0]);
+        for (let i = 1; i < chunks.length; i++) {
+          await message.channel.send(chunks[i]);
+        }
+      } else {
+        await message.reply(reply);
+      }
+      
+    } catch (groqError) {
+      console.error("❌ Groq Error:", {
+        status: groqError.response?.status,
+        data: groqError.response?.data,
+        message: groqError.message
+      });
+      
+      if (groqError.response?.status === 401) {
+        await message.reply("🔑 Groq API key is invalid. Please check your GROQ_API_KEY environment variable.");
+      } else if (groqError.response?.status === 429) {
+        await message.reply("⏰ Groq rate limit exceeded. Please wait a moment and try again.");
+      } else if (groqError.code === 'ECONNABORTED') {
+        await message.reply("⏱️ AI service timeout. Please try again.");
+      } else {
+        await message.reply("⚠️ AI service error. Please try again later.");
+      }
+    }
 
   } catch (error) {
-    console.error("❌ Error:", error.response?.data || error.message);
-    
-    // User-friendly error messages
-    let userMessage = "⚠️ Error processing your request. Please try again later.";
-    
-    if (error.response?.status === 401) {
-      userMessage = "🔑 API key error. Please contact admin.";
-    } else if (error.response?.status === 429) {
-      userMessage = "⏰ Too many requests. Please wait a moment and try again.";
-    } else if (error.code === 'ECONNREFUSED') {
-      userMessage = "🌐 Connection error. Please try again in a few seconds.";
-    }
-    
-    await message.reply(userMessage);
+    console.error("❌ UNEXPECTED ERROR:", error);
+    await message.reply("⚠️ Unexpected error. Please try again later.");
   }
 });
 
