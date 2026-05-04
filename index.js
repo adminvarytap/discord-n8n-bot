@@ -3,18 +3,20 @@ import { Client, GatewayIntentBits } from "discord.js";
 import axios from "axios";
 
 // =====================
-// EXPRESS SERVER (Render requirement)
+// EXPRESS (Render requirement)
 // =====================
 const app = express();
+app.get("/", (req, res) => res.send("Bot is running"));
+app.listen(process.env.PORT || 3000);
 
-app.get("/", (req, res) => {
-  res.send("✅ Bot is running");
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🌐 Web server running on port ${PORT}`);
-});
+// =====================
+// CONFIG
+// =====================
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GITHUB_OWNER = process.env.GITHUB_OWNER;
+const GITHUB_REPO = process.env.GITHUB_REPO;
 
 // =====================
 // DISCORD BOT
@@ -27,45 +29,88 @@ const client = new Client({
   ]
 });
 
-const TOKEN = process.env.DISCORD_TOKEN;
-const N8N_WEBHOOK = process.env.N8N_WEBHOOK;
-
 client.once("ready", () => {
-  console.log(`🤖 Bot logged in as ${client.user.tag}`);
+  console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
 // =====================
-// MESSAGE HANDLER
+// HANDLE MESSAGE
 // =====================
 client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+
+  const text = message.content;
+
   try {
-    if (message.author.bot) return;
+    // =====================
+    // TICKET FLOW
+    // =====================
+    if (text.startsWith("!ticket ")) {
+      const issue = text.replace("!ticket ", "");
 
-    console.log("📩 Message:", message.content);
+      // Create GitHub issue
+      await axios.post(
+        `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`,
+        {
+          title: `[BUG] ${issue}`,
+          body: `
+User: ${message.author.username}
 
-    // Send message to n8n
-    const res = await axios.post(N8N_WEBHOOK, {
-      content: message.content,
-      username: message.author.username,
-      userId: message.author.id,
-      channelId: message.channelId
-    });
+Issue:
+${issue}
 
-    const reply = res.data?.reply;
+Source: Discord bot
+          `
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${GITHUB_TOKEN}`,
+            Accept: "application/vnd.github+json"
+          }
+        }
+      );
 
-    if (reply) {
-      await message.reply(reply);
-    } else {
-      await message.reply("⚠️ No response from workflow");
+      await message.reply("📝 Ticket created in GitHub!");
+      return;
     }
 
-  } catch (error) {
-    console.error("❌ Error:", error.message);
-    await message.reply("⚠️ Something went wrong");
+    // =====================
+    // AI RESPONSE (Groq)
+    // =====================
+    const aiRes = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama-3.1-8b-instant",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a helpful assistant. Answer clearly and concisely."
+          },
+          {
+            role: "user",
+            content: text
+          }
+        ]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    const reply =
+      aiRes.data?.choices?.[0]?.message?.content || "No response";
+
+    await message.reply(reply);
+
+  } catch (err) {
+    console.error(err.response?.data || err.message);
+    await message.reply("⚠️ Error processing request");
   }
 });
 
 // =====================
-// START BOT
-// =====================
-client.login(TOKEN);
+client.login(DISCORD_TOKEN);
