@@ -1,0 +1,13 @@
+{
+  "name": "discord-n8n-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "axios": "^1.6.0"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}
